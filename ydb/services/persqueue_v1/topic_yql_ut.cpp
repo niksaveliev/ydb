@@ -49,6 +49,69 @@ Y_UNIT_TEST_SUITE(TTopicYqlTest) {
         UNIT_ASSERT_VALUES_EQUAL(describeAfterCreate.GetPartitionStrategy().GetMaxPartitionCount(), 5);
     }
 
+    Y_UNIT_TEST(DisableSplitMerge) {
+        NKikimrConfig::TFeatureFlags ff;
+        ff.SetEnableTopicSplitMerge(true);
+        auto settings = NKikimr::NPersQueueTests::PQSettings();
+        settings.SetFeatureFlags(ff);
+
+        NPersQueue::TTestServer server(settings);
+
+        const char *query = R"__(
+            CREATE TOPIC `/Root/PQ/rt3.dc1--legacy--topic1` (
+                CONSUMER c1,
+                CONSUMER c2 WITH (important = true, read_from = 100, supported_codecs = 'RAW, LZOP, GZIP')
+            ) WITH (min_active_partitions = 2,
+                    max_active_partitions = 5,
+                    auto_partitioning_strategy = 'scale_up'
+            );
+        )__";
+
+        server.AnnoyingClient->RunYqlSchemeQuery(query);
+
+        auto pqGroup = server.AnnoyingClient->Ls("/Root/PQ/rt3.dc1--legacy--topic1")->Record.GetPathDescription()
+                                                                                            .GetPersQueueGroup();
+        const auto& describeAfterCreate = pqGroup.GetPQTabletConfig();
+        UNIT_ASSERT_VALUES_EQUAL(describeAfterCreate.GetPartitionStrategy().GetMinPartitionCount(), 2);
+        UNIT_ASSERT_VALUES_EQUAL(describeAfterCreate.GetPartitionStrategy().GetMaxPartitionCount(), 5);
+        UNIT_ASSERT_VALUES_EQUAL(static_cast<int>(describeAfterCreate.GetPartitionStrategy().GetPartitionStrategyType()), static_cast<int>(::NKikimrPQ::TPQTabletConfig_TPartitionStrategyType::TPQTabletConfig_TPartitionStrategyType_CAN_SPLIT));
+
+
+        const char *query2 = R"__(
+        ALTER TOPIC `/Root/PQ/rt3.dc1--legacy--topic1`
+            ALTER CONSUMER c2 SET (read_from = Timestamp('2021-01-01T01:01:01Z')),
+            SET (auto_partitioning_strategy = 'disabled'
+            );
+        )__";
+
+        server.AnnoyingClient->RunYqlSchemeQuery(query2, false);
+        auto pqGroup2 = server.AnnoyingClient->Ls("/Root/PQ/rt3.dc1--legacy--topic1")->Record.GetPathDescription()
+                                                                                             .GetPersQueueGroup();
+        const auto& describeAfterAlter = pqGroup2.GetPQTabletConfig();
+
+        UNIT_ASSERT_VALUES_EQUAL(describeAfterAlter.GetPartitionStrategy().GetMinPartitionCount(), 2);
+        UNIT_ASSERT_VALUES_EQUAL(describeAfterAlter.GetPartitionStrategy().GetMaxPartitionCount(), 5);
+        UNIT_ASSERT_VALUES_EQUAL(static_cast<int>(describeAfterAlter.GetPartitionStrategy().GetPartitionStrategyType()), static_cast<int>(::NKikimrPQ::TPQTabletConfig_TPartitionStrategyType::TPQTabletConfig_TPartitionStrategyType_CAN_SPLIT));
+
+
+        const char *query3 = R"__(
+        ALTER TOPIC `/Root/PQ/rt3.dc1--legacy--topic1`
+            ALTER CONSUMER c2 SET (read_from = Timestamp('2021-01-01T01:01:01Z')),
+            SET (auto_partitioning_strategy = 'disabled'
+                 max_active_partitions = 0,
+            );
+        )__";
+
+        server.AnnoyingClient->RunYqlSchemeQuery(query3);
+        auto pqGroup3 = server.AnnoyingClient->Ls("/Root/PQ/rt3.dc1--legacy--topic1")->Record.GetPathDescription()
+                                                                                             .GetPersQueueGroup();
+        const auto& describeAfterAlter2 = pqGroup3.GetPQTabletConfig();
+
+        UNIT_ASSERT_VALUES_EQUAL(describeAfterAlter2.GetPartitionStrategy().GetMinPartitionCount(), 2);
+        UNIT_ASSERT_VALUES_EQUAL(describeAfterAlter2.GetPartitionStrategy().GetMaxPartitionCount(), 0);
+        UNIT_ASSERT_VALUES_EQUAL(static_cast<int>(describeAfterAlter2.GetPartitionStrategy().GetPartitionStrategyType()), static_cast<int>(::NKikimrPQ::TPQTabletConfig_TPartitionStrategyType::TPQTabletConfig_TPartitionStrategyType_DISABLED));
+    }
+
     Y_UNIT_TEST(CreateAndAlterTopicYql) {
         NKikimrConfig::TFeatureFlags ff;
         ff.SetEnableTopicSplitMerge(true);
